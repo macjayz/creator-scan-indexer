@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch factory-watcher/index.js",
+    "dev": "concurrently \"npm run factory-watcher\" \"npm run dex-watcher\"",
     "factory-watcher": "node factory-watcher/index.js",
-    "test": "node test-factory-watcher.js"
+    "dex-watcher": "node dex-watcher/index.js",
+    "test": "node test-factory-watcher.js",
+    "monitor": "node monitor.js"
   },
   "dependencies": {
+    "concurrently": "^8.2.2",
+    "dotenv": "^16.3.1",
     "ethers": "^6.13.0",
-    "pg": "^8.11.3",
-    "dotenv": "^16.3.1"
+    "pg": "^8.11.3"
   }
 }

@@ -31,6 +31,27 @@ export const config = {
     }
   },
   
+  // DEX addresses
+  dex: {
+    uniswapV3: {
+      factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
+      startBlock: parseInt(process.env.START_BLOCK || '20000000'),
+      abi: ['event PoolCreated(address indexed token0, address indexed token1, uint24 fee, int24 tickSpacing, address pool)']
+    },
+    aerodrome: {
+      factory: '0x420DD381b31aEf6683db6B902084cB0FFECe40Da',
+      startBlock: parseInt(process.env.START_BLOCK || '20000000'),
+      abi: ['event PoolCreated(address indexed token0, address indexed token1, bool stable, address pool, uint256)']
+    }
+  },
+  
+  // Common base tokens to ignore
+  baseTokens: [
+    '0x4200000000000000000000000000000000000006', // WETH
+    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC
+    '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22'  // cbETH
+  ],
+  
   database: {
     url: process.env.DATABASE_URL,
     pool: {
@@ -40,20 +61,5 @@ export const config = {
     }
   }
 };
-
-// Validate required config (COMMENTED OUT FOR NOW - causing issues)
-// const requiredVars = [
-//   'BASE_HTTP_URL',
-//   'ZORA_FACTORY_ADDRESS',
-//   'CLANKER_FACTORY_ADDRESS',
-//   'DATABASE_URL'
-// ];
-
-// for (const envVar of requiredVars) {
-//   if (!process.env[envVar]) {
-//     console.error(`❌ Missing required environment variable: ${envVar}`);
-//     process.exit(1);
-//   }
-// }
 
 console.log('✅ Configuration loaded successfully');
