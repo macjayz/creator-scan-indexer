@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CreatorScan Simple Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .token { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+        button { padding: 10px 20px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>CreatorScan Simple Test</h1>
+    <button id="load-btn">Load Tokens</button>
+    <div id="tokens"></div>
+    
+    <script>
+        const API_BASE = 'http://localhost:3001/api';
+        
+        async function loadTokens() {
+            const container = document.getElementById('tokens');
+            container.innerHTML = '<p>Loading...</p>';
+            
+            try {
+                const response = await fetch(API_BASE + '/tokens');
+                const data = await response.json();
+                
+                if (data.success) {
+                    let html = '<h3>Found ' + data.count + ' tokens:</h3>';
+                    data.tokens.forEach(token => {
+                        html += '<div class="token">';
+                        html += '<strong>' + (token.name || 'Unnamed') + '</strong> ';
+                        html += '(' + (token.symbol || 'No symbol') + ')<br>';
+                        html += 'Platform: ' + (token.platform || 'unknown') + '<br>';
+                        html += 'Address: ' + token.address.substring(0, 10) + '...';
+                        html += '</div>';
+                    });
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<p style="color: red;">Error: ' + data.error + '</p>';
+                }
+            } catch (error) {
+                container.innerHTML = '<p style="color: red;">Failed to load: ' + error.message + '</p>';
+            }
+        }
+        
+        document.getElementById('load-btn').addEventListener('click', loadTokens);
+        
+        // Load on page load
+        loadTokens();
+    </script>
+</body>
+</html>

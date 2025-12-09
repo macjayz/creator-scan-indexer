@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CreatorScan Base - Discover Creator Coins</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            padding: 40px 20px;
+            border-bottom: 1px solid #334155;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #60a5fa, #8b5cf6);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #94a3b8;
+            font-size: 1.1rem;
+        }
+        
+        .stats-bar {
+            display: flex;
+            justify-content: space-around;
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        
+        .stat {
+            text-align: center;
+            flex: 1;
+            min-width: 150px;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+        
+        .stat-label {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .refresh-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        
+        .refresh-btn:hover {
+            background: #2563eb;
+        }
+        
+        .refresh-btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+        
+        .platform-filter {
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #f8fafc;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+        
+        .tokens-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .token-card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #334155;
+            transition: transform 0.3s, border-color 0.3s;
+        }
+        
+        .token-card:hover {
+            transform: translateY(-5px);
+            border-color: #60a5fa;
+        }
+        
+        .token-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .token-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #60a5fa, #8b5cf6);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        
+        .token-info {
+            flex: 1;
+        }
+        
+        .token-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .token-symbol {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+        
+        .token-details {
+            margin-top: 15px;
+        }
+        
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .detail-label {
+            color: #94a3b8;
+        }
+        
+        .platform-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .platform-zora {
+            background: rgba(96, 165, 250, 0.2);
+            color: #60a5fa;
+        }
+        
+        .platform-clanker {
+            background: rgba(139, 92, 246, 0.2);
+            color: #8b5cf6;
+        }
+        
+        .platform-flaunch {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .platform-mint_club {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .status-detected {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+        
+        .status-active {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #94a3b8;
+        }
+        
+        .error {
+            text-align: center;
+            padding: 40px;
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+            border-radius: 12px;
+            margin: 20px 0;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+            border-top: 1px solid #334155;
+            margin-top: 40px;
+        }
+        
+        .address-link {
+            color: #60a5fa;
+            text-decoration: none;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        
+        .address-link:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+            .tokens-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .platform-filter {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>CreatorScan Base</h1>
+        <p class="subtitle">Discover creator coins launched on Base network</p>
+    </header>
+    
+    <div class="stats-bar">
+        <div class="stat">
+            <div class="stat-value" id="total-tokens">0</div>
+            <div class="stat-label">Total Tokens</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="unique-platforms">0</div>
+            <div class="stat-label">Platforms</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="latest-detection">--:--</div>
+            <div class="stat-label">Latest Detection</div>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button class="refresh-btn" id="refresh-btn">🔄 Refresh Tokens</button>
+        <select class="platform-filter" id="platform-filter">
+            <option value="all">All Platforms</option>
+            <option value="zora">Zora</option>
+            <option value="clanker">Clanker</option>
+            <option value="flaunch">Flaunch</option>
+            <option value="mint_club">Mint Club</option>
+            <option value="unknown">Unknown</option>
+        </select>
+    </div>
+    
+    <div id="tokens-container">
+        <div class="loading">Loading tokens...</div>
+    </div>
+    
+    <footer>
+        <p>CreatorScan Base Indexer • Real-time detection of creator coins</p>
+        <p>Monitoring: Zora • Clanker • Flaunch • Mint Club • DEX liquidity</p>
+        <p><a href="http://localhost:3001/api/tokens" class="address-link" target="_blank">View API</a> • 
+           <a href="http://localhost:3001/api/health" class="address-link" target="_blank">API Health</a></p>
+    </footer>
+    
+    <script>
+        // Main application JavaScript
+        const API_BASE = 'http://localhost:3001/api';
+        let allTokens = [];
+        let currentPlatform = 'all';
+        
+        // Platform colors mapping
+        const platformColors = {
+            'zora': 'platform-zora',
+            'clanker': 'platform-clanker', 
+            'flaunch': 'platform-flaunch',
+            'mint_club': 'platform-mint_club',
+            'dex_uniswap_v3': 'platform-zora',
+            'dex_aerodrome': 'platform-clanker',
+            'unknown': ''
+        };
+        
+        // Helper functions
+        function formatAddress(address) {
+            if (!address) return 'N/A';
+            return address.substring(0, 6) + '...' + address.substring(address.length - 4);
+        }
+        
+        function formatDate(dateString) {
+            if (!dateString) return 'Unknown';
+            const date = new Date(dateString);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString().substring(0, 5);
+        }
+        
+        function getPlatformClass(platform) {
+            return platformColors[platform] || '';
+        }
+        
+        function formatPlatform(platform) {
+            if (!platform) return 'Unknown';
+            return platform.charAt(0).toUpperCase() + platform.slice(1).replace('_', ' ');
+        }
+        
+        // Load tokens from API
+        async function loadTokens() {
+            const container = document.getElementById('tokens-container');
+            
+            try {
+                // Show loading state
+                container.innerHTML = '<div class="loading">Loading tokens...</div>';
+                
+                // Disable refresh button during load
+                document.getElementById('refresh-btn').disabled = true;
+                
+                const response = await fetch(API_BASE + '/tokens?limit=100');
+                const data = await response.json();
+                
+                if (data.success) {
+                    allTokens = data.tokens;
+                    updateStats();
+                    renderTokens();
+                } else {
+                    throw new Error(data.error || 'Failed to load tokens');
+                }
+            } catch (error) {
+                console.error('Error loading tokens:', error);
+                container.innerHTML = '<div class="error"><h3>Error loading tokens</h3><p>' + error.message + '</p><p>Make sure the backend API is running on port 3001</p></div>';
+            } finally {
+                document.getElementById('refresh-btn').disabled = false;
+            }
+        }
+        
+        // Update statistics
+        function updateStats() {
+            if (allTokens.length === 0) return;
+            
+            // Total tokens
+            document.getElementById('total-tokens').textContent = allTokens.length;
+            
+            // Unique platforms
+            const platforms = [...new Set(allTokens.map(token => token.platform))].filter(p => p);
+            document.getElementById('unique-platforms').textContent = platforms.length;
+            
+            // Latest detection
+            const latest = allTokens.reduce((latest, token) => {
+                const tokenTime = new Date(token.detection_timestamp);
+                return tokenTime > latest ? tokenTime : latest;
+            }, new Date(0));
+            
+            if (latest.getTime() > 0) {
+                document.getElementById('latest-detection').textContent = 
+                    latest.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            }
+        }
+        
+        // Render tokens based on current filter
+        function renderTokens() {
+            const container = document.getElementById('tokens-container');
+            
+            // Filter tokens by platform
+            const filteredTokens = currentPlatform === 'all' 
+                ? allTokens 
+                : allTokens.filter(token => token.platform === currentPlatform);
+            
+            if (filteredTokens.length === 0) {
+                let message = 'No tokens found';
+                if (currentPlatform !== 'all') {
+                    message += ' for platform: ' + currentPlatform;
+                }
+                container.innerHTML = '<div class="loading">' + message + '</div>';
+                return;
+            }
+            
+            // Create tokens grid
+            container.innerHTML = '<div class="tokens-grid" id="tokens-grid"></div>';
+            
+            const grid = document.getElementById('tokens-grid');
+            
+            filteredTokens.forEach(token => {
+                const card = document.createElement('div');
+                card.className = 'token-card';
+                
+                const platformClass = getPlatformClass(token.platform);
+                const statusClass = 'status-' + (token.status || 'detected');
+                
+                // Build card HTML using string concatenation to avoid template literal issues
+                let cardHTML = '<div class="token-header">';
+                cardHTML += '<div class="token-icon">' + (token.symbol ? token.symbol.charAt(0) : '?') + '</div>';
+                cardHTML += '<div class="token-info">';
+                cardHTML += '<div class="token-name">' + (token.name || 'Unnamed Token');
+                cardHTML += '<span class="status-badge ' + statusClass + '">' + (token.status || 'detected') + '</span>';
+                cardHTML += '</div>';
+                cardHTML += '<div class="token-symbol">' + (token.symbol || 'No symbol');
+                cardHTML += ' <span class="platform-badge ' + platformClass + '">' + formatPlatform(token.platform) + '</span>';
+                cardHTML += '</div>';
+                cardHTML += '</div></div>';
+                
+                cardHTML += '<div class="token-details">';
+                cardHTML += '<div class="detail-row"><span class="detail-label">Address:</span>';
+                cardHTML += '<a href="' + API_BASE + '/tokens/' + token.address + '" class="address-link" target="_blank">';
+                cardHTML += formatAddress(token.address) + '</a></div>';
+                
+                cardHTML += '<div class="detail-row"><span class="detail-label">Creator:</span>';
+                cardHTML += '<span>' + formatAddress(token.creator_address) + '</span></div>';
+                
+                cardHTML += '<div class="detail-row"><span class="detail-label">Detected:</span>';
+                cardHTML += '<span>' + formatDate(token.detection_timestamp) + '</span></div>';
+                
+                cardHTML += '<div class="detail-row"><span class="detail-label">Method:</span>';
+                cardHTML += '<span>' + (token.detection_method || 'unknown') + '</span></div>';
+                
+                if (token.total_supply) {
+                    cardHTML += '<div class="detail-row"><span class="detail-label">Total Supply:</span>';
+                    cardHTML += '<span>' + parseInt(token.total_supply).toLocaleString() + '</span></div>';
+                }
+                
+                cardHTML += '</div>';
+                
+                card.innerHTML = cardHTML;
+                grid.appendChild(card);
+            });
+        }
+        
+        // Event listeners
+        document.getElementById('refresh-btn').addEventListener('click', loadTokens);
+        
+        document.getElementById('platform-filter').addEventListener('change', function(e) {
+            currentPlatform = e.target.value;
+            renderTokens();
+        });
+        
+        // Initial load
+        loadTokens();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadTokens, 30000);
+    </script>
+</body>
+</html>
