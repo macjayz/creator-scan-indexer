@@ -1,0 +1,36 @@
+# docker-compose.yml - UPDATED WITH DIFFERENT PORTS
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: creator_scan
+      POSTGRES_PASSWORD: local_password
+      POSTGRES_DB: creator_scan
+    ports:
+      - "5433:5432"  # Changed from 5432:5432 to 5433:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creator_scan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # Changed from 6379:6379 to 6380:6379
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
