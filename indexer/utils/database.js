@@ -81,17 +81,6 @@ export class Database {
     return this.query(query, values);
   }
 
-  async getLatestBlockProcessed(eventType) {
-    const query = `
-      SELECT MAX(block_number) as latest_block 
-      FROM detection_events 
-      WHERE event_type = $1 AND processed = true
-    `;
-    
-    const result = await this.query(query, [eventType]);
-    return result.rows[0]?.latest_block || config.factories.zora.startBlock;
-  }
-
   async close() {
     await this.pool.end();
   }

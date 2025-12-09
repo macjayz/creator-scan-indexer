@@ -1,0 +1,217 @@
+// indexer/factory-watcher/index.js - Updated for Free Tier Limits
+import { ethers } from 'ethers';
+import { config } from '../config/index.js';
+import { db } from '../utils/database.js';
+
+class FactoryWatcher {
+  constructor() {
+    this.httpProvider = new ethers.JsonRpcProvider(config.base.httpUrl);
+    this.isRunning = false;
+    this.lastProcessedBlock = {
+      zora: config.factories.zora.startBlock,
+      clanker: config.factories.clanker.startBlock
+    };
+    this.maxBlocksPerRequest = 10; // Free tier limit for eth_getLogs
+  }
+
+  async start() {
+    console.log('🚀 Starting Factory Watcher (HTTP Polling Mode)...');
+    console.log(`📡 Monitoring:`);
+    console.log(`   • Zora Factory: ${config.factories.zora.address}`);
+    console.log(`   • Clanker Factory: ${config.factories.clanker.address}`);
+    console.log(`⚠️  Using ${this.maxBlocksPerRequest} blocks per request (Free tier limit)`);
+    
+    this.isRunning = true;
+    
+    // Start polling
+    await this.pollForEvents();
+    
+    console.log('✅ Factory Watcher is running');
+  }
+
+  async pollForEvents() {
+    while (this.isRunning) {
+      try {
+        const currentBlock = await this.httpProvider.getBlockNumber();
+        
+        // Process each factory
+        for (const [platform, factory] of Object.entries(config.factories)) {
+          await this.processFactoryEvents(platform, factory, currentBlock);
+        }
+        
+        // Wait before next poll (30 seconds)
+        console.log('⏳ Waiting 30 seconds for next poll...');
+        await new Promise(resolve => setTimeout(resolve, 30000));
+        
+      } catch (error) {
+        console.error('Polling error:', error.message);
+        await new Promise(resolve => setTimeout(resolve, 60000)); // Wait longer on error
+      }
+    }
+  }
+
+  async processFactoryEvents(platform, factory, currentBlock) {
+    try {
+      const fromBlock = this.lastProcessedBlock[platform];
+      
+      // Don't process if we're already at current block
+      if (fromBlock >= currentBlock) {
+        return;
+      }
+      
+      // Calculate safe end block (respecting 10-block limit)
+      const toBlock = Math.min(
+        fromBlock + this.maxBlocksPerRequest - 1, // -1 because inclusive
+        currentBlock
+      );
+      
+      if (fromBlock > toBlock) {
+        return;
+      }
+      
+      console.log(`📊 ${platform}: Processing blocks ${fromBlock} to ${toBlock} (${toBlock - fromBlock + 1} blocks)`);
+      
+      const contract = new ethers.Contract(factory.address, factory.abi, this.httpProvider);
+      
+      // Get events for this small range
+      let events = [];
+      if (platform === 'zora') {
+        events = await contract.queryFilter('CoinCreated', fromBlock, toBlock);
+      } else if (platform === 'clanker') {
+        events = await contract.queryFilter('TokenCreated', fromBlock, toBlock);
+      }
+      
+      if (events.length > 0) {
+        console.log(`🎯 ${platform}: Found ${events.length} new token(s)`);
+        
+        for (const event of events) {
+          await this.handleEvent(platform, factory, event);
+        }
+      } else {
+        console.log(`   ${platform}: No new tokens found`);
+      }
+      
+      // Update last processed block
+      this.lastProcessedBlock[platform] = toBlock + 1;
+      
+    } catch (error) {
+      console.error(`Error processing ${platform} events:`, error.message);
+      // On error, wait before retrying
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+
+  async handleEvent(platform, factory, event) {
+    try {
+      let tokenAddress, name, symbol, creatorAddress;
+      
+      if (platform === 'zora') {
+        [tokenAddress, name, symbol, creatorAddress] = event.args;
+        console.log(`   🆕 Zora: ${symbol} (${name}) by ${creatorAddress.substring(0, 10)}...`);
+      } else if (platform === 'clanker') {
+        [tokenAddress, creatorAddress] = event.args;
+        name = event.args[6];
+        symbol = event.args[7];
+        console.log(`   🆕 Clanker: ${symbol} (${name}) by ${creatorAddress.substring(0, 10)}...`);
+      }
+      
+      // 1. Log the detection event
+      await db.insertDetectionEvent({
+        eventType: `${platform}_factory`,
+        contractAddress: factory.address,
+        blockNumber: event.blockNumber,
+        transactionHash: event.transactionHash,
+        logIndex: event.logIndex,
+        rawData: {
+          tokenAddress,
+          name,
+          symbol,
+          creatorAddress,
+          platform
+        }
+      });
+
+      // 2. Fetch token metadata
+      const tokenMetadata = await this.fetchTokenMetadata(tokenAddress);
+      
+      // 3. Insert into tokens table
+      const result = await db.insertToken({
+        address: tokenAddress,
+        name: name || tokenMetadata.name,
+        symbol: symbol || tokenMetadata.symbol,
+        decimals: tokenMetadata.decimals,
+        totalSupply: tokenMetadata.totalSupply,
+        creatorAddress: creatorAddress,
+        detectionMethod: `${platform}_factory`,
+        detectionBlockNumber: event.blockNumber,
+        detectionTransactionHash: event.transactionHash,
+        platform: platform,
+        factoryAddress: factory.address,
+        status: 'detected'
+      });
+
+      console.log(`   ✅ Indexed: ${symbol} at ${tokenAddress.substring(0, 10)}...`);
+      
+    } catch (error) {
+      console.error(`❌ Error handling ${platform} event:`, error.message);
+    }
+  }
+
+  async fetchTokenMetadata(tokenAddress) {
+    try {
+      const erc20Abi = [
+        'function name() view returns (string)',
+        'function symbol() view returns (string)',
+        'function decimals() view returns (uint8)',
+        'function totalSupply() view returns (uint256)'
+      ];
+      
+      const tokenContract = new ethers.Contract(tokenAddress, erc20Abi, this.httpProvider);
+      
+      const [name, symbol, decimals, totalSupply] = await Promise.all([
+        tokenContract.name().catch(() => ''),
+        tokenContract.symbol().catch(() => ''),
+        tokenContract.decimals().catch(() => 18),
+        tokenContract.totalSupply().catch(() => '0')
+      ]);
+
+      return {
+        name,
+        symbol,
+        decimals: Number(decimals),
+        totalSupply: totalSupply.toString()
+      };
+    } catch (error) {
+      console.error(`Failed to fetch metadata for ${tokenAddress}:`, error.message);
+      return {
+        name: '',
+        symbol: '',
+        decimals: 18,
+        totalSupply: '0'
+      };
+    }
+  }
+
+  async stop() {
+    this.isRunning = false;
+    await db.close();
+    console.log('🛑 Factory Watcher stopped');
+  }
+}
+
+// Handle process termination
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Received SIGINT. Stopping Factory Watcher...');
+  await watcher.stop();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\n🛑 Received SIGTERM. Stopping Factory Watcher...');
+  await watcher.stop();
+  process.exit(0);
+});
+
+// Start the watcher
+const watcher = new FactoryWatcher();
+watcher.start().catch(console.error);
