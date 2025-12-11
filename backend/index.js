@@ -1,211 +1,245 @@
-// backend/index.js - TWO ENDPOINTS NOW
 import express from 'express';
-import pg from 'pg';
-import dotenv from 'dotenv';
+import { Pool } from 'pg';
 import cors from 'cors';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import dotenv from 'dotenv';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-dotenv.config({ path: join(__dirname, '../.env') });
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Middleware
+// Database connection
+const pool = new Pool({
+  connectionString:
+    process.env.DATABASE_URL ||
+    'postgresql://creator_scan:local_password@localhost:5433/creator_scan',
+});
+
 app.use(cors());
 app.use(express.json());
 
-// Database connection
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 10,
-  idleTimeoutMillis: 30000
-});
-
-// Helper: Validate Ethereum address
-function isValidEthAddress(address) {
-  return /^0x[a-fA-F0-9]{40}$/.test(address);
-}
-
-// ENDPOINT 1: Get all tokens
-app.get('/api/tokens', async (req, res) => {
-  try {
-    const { limit = 50, offset = 0, platform } = req.query;
-    
-    let query = `
-      SELECT 
-        address,
-        name,
-        symbol,
-        decimals,
-        total_supply,
-        creator_address,
-        platform,
-        detection_method,
-        detection_timestamp,
-        status,
-        created_at
-      FROM tokens
-    `;
-    
-    const params = [];
-    
-    if (platform) {
-      query += ` WHERE platform = $${params.length + 1}`;
-      params.push(platform);
-    }
-    
-    query += ` ORDER BY detection_timestamp DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(parseInt(limit), parseInt(offset));
-    
-    const result = await pool.query(query, params);
-    
-    res.json({
-      success: true,
-      count: result.rows.length,
-      tokens: result.rows
-    });
-    
-  } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error'
-    });
-  }
-});
-
-// ENDPOINT 2: Get single token by address
-app.get('/api/tokens/:address', async (req, res) => {
-  try {
-    const { address } = req.params;
-    
-    // Validate address format
-    if (!isValidEthAddress(address)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid Ethereum address format'
-      });
-    }
-    
-    // Get token details
-    const tokenQuery = `
-      SELECT 
-        address,
-        name,
-        symbol,
-        decimals,
-        total_supply,
-        creator_address,
-        platform,
-        detection_method,
-        detection_block_number,
-        detection_transaction_hash,
-        detection_timestamp,
-        factory_address,
-        status,
-        is_verified,
-        metadata_uri,
-        image_url,
-        created_at,
-        updated_at
-      FROM tokens 
-      WHERE address = $1
-    `;
-    
-    const tokenResult = await pool.query(tokenQuery, [address.toLowerCase()]);
-    
-    if (tokenResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Token not found'
-      });
-    }
-    
-    const token = tokenResult.rows[0];
-    
-    // Get latest metrics if available
-    const metricsQuery = `
-      SELECT 
-        price_eth,
-        price_usd,
-        liquidity_eth,
-        liquidity_usd,
-        volume_24h_eth,
-        volume_24h_usd,
-        holder_count,
-        primary_pool_address,
-        dex_name,
-        captured_at
-      FROM token_metrics 
-      WHERE token_address = $1 
-      ORDER BY captured_at DESC 
-      LIMIT 1
-    `;
-    
-    const metricsResult = await pool.query(metricsQuery, [address.toLowerCase()]);
-    const metrics = metricsResult.rows[0] || null;
-    
-    // Get creator profile if available
-    const creatorQuery = `
-      SELECT 
-        farcaster_handle,
-        farcaster_fid,
-        twitter_handle,
-        avatar_url,
-        bio
-      FROM creator_profiles 
-      WHERE address = $1
-    `;
-    
-    const creatorResult = await pool.query(creatorQuery, [token.creator_address]);
-    const creator = creatorResult.rows[0] || null;
-    
-    res.json({
-      success: true,
-      token: {
-        ...token,
-        metrics,
-        creator
-      }
-    });
-    
-  } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error'
-    });
-  }
-});
-
-// Health check endpoint
+// Health check
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ 
-      status: 'healthy',
-      timestamp: new Date().toISOString()
+    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ status: 'unhealthy', error: error.message });
+  }
+});
+
+/* ----------------------------------------------------------
+   NEW ENDPOINT ADDED
+   /api/platforms → Returns the platform list + token counts
+------------------------------------------------------------- */
+app.get('/api/platforms', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT platform, COUNT(*) as count
+      FROM tokens
+      GROUP BY platform
+      ORDER BY count DESC
+    `);
+
+    res.json({
+      success: true,
+      platforms: result.rows,
     });
   } catch (error) {
-    res.status(500).json({ 
-      status: 'unhealthy',
-      error: error.message 
+    console.error('Error fetching platforms:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
     });
+  }
+});
+
+// Get all tokens with filters
+app.get('/api/tokens', async (req, res) => {
+  try {
+    const {
+      platform,
+      search,
+      limit = 200,
+      offset = 0,
+      sort = 'detection_timestamp',
+      order = 'DESC',
+    } = req.query;
+
+    let query = 'SELECT * FROM tokens WHERE 1=1';
+    const params = [];
+    let paramCount = 0;
+
+    // Platform filter
+    if (platform) {
+      paramCount++;
+      if (platform === 'dex') {
+        query += ` AND platform LIKE $${paramCount}`;
+        params.push('dex%');
+      } else {
+        query += ` AND platform = $${paramCount}`;
+        params.push(platform);
+      }
+    }
+
+    // Search filter
+    if (search) {
+      paramCount++;
+      query += ` AND (
+        name ILIKE $${paramCount} OR 
+        symbol ILIKE $${paramCount} OR 
+        address ILIKE $${paramCount} OR
+        creator_address ILIKE $${paramCount}
+      )`;
+      params.push(`%${search}%`);
+    }
+
+    // Count total
+    const countQuery = `SELECT COUNT(*) as total FROM (${query}) as filtered`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+
+    // Add sorting and pagination
+    paramCount++;
+    query += ` ORDER BY ${sort} ${order} LIMIT $${paramCount}`;
+    params.push(parseInt(limit));
+
+    if (offset > 0) {
+      paramCount++;
+      query += ` OFFSET $${paramCount}`;
+      params.push(parseInt(offset));
+    }
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      total,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      tokens: result.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching tokens:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Get token by address (full JSON)
+app.get('/api/tokens/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM tokens WHERE address = $1',
+      [address.toLowerCase()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      });
+    }
+
+    res.json({
+      success: true,
+      token: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Error fetching token:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Get platform statistics
+app.get('/api/stats', async (req, res) => {
+  try {
+    const platformStats = await pool.query(`
+      SELECT 
+        platform,
+        COUNT(*) as count
+      FROM tokens
+      GROUP BY platform
+      ORDER BY count DESC
+    `);
+
+    const totalResult = await pool.query(
+      'SELECT COUNT(*) as total FROM tokens'
+    );
+    const total = parseInt(totalResult.rows[0].total);
+
+    const recentResult = await pool.query(`
+      SELECT COUNT(*) as recent 
+      FROM tokens 
+      WHERE detection_timestamp > NOW() - INTERVAL '24 hours'
+    `);
+    const recent24h = parseInt(recentResult.rows[0].recent);
+
+    res.json({
+      success: true,
+      total,
+      recent24h,
+      platforms: platformStats.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Get detection events
+app.get('/api/events', async (req, res) => {
+  try {
+    const { limit = 50 } = req.query;
+    const result = await pool.query(
+      `SELECT * FROM detection_events 
+       ORDER BY block_number DESC, log_index DESC 
+       LIMIT $1`,
+      [parseInt(limit)]
+    );
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      events: result.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Duplicate endpoint (kept minimal for compatibility)
+app.get('/api/tokens/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM tokens WHERE address = $1',
+      [address.toLowerCase()]
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: 'Token not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Start server
 app.listen(port, () => {
   console.log(`🚀 Backend API running on http://localhost:${port}`);
-  console.log(`📡 Endpoints:`);
-  console.log(`   • GET /api/tokens - List all tokens`);
-  console.log(`   • GET /api/tokens/:address - Get token details`);
-  console.log(`   • GET /api/health - Health check`);
-  console.log(`\nExamples:`);
-  console.log(`   curl http://localhost:${port}/api/tokens`);
-  console.log(`   curl http://localhost:${port}/api/tokens/0x1234567890abcdef1234567890abcdef12345678`);
 });

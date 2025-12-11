@@ -1,0 +1,141 @@
+--- index.js.backup
++++ index.js
+@@ -1,4 +1,5 @@
+ import { ethers } from 'ethers';
++import { getTransactionDetails } from '../utils/transaction.js';
+ import { config } from '../config/index.js';
+ import { db } from '../utils/database.js';
+ 
+@@ -150,6 +151,12 @@
+ 
+   async handleEvent(platform, factory, event) {
+     try {
++      // Get transaction details to capture ui_deployer
++      const txDetails = await getTransactionDetails(event.transactionHash);
++      const uiDeployer = txDetails?.from || '0x0000000000000000000000000000000000000000';
++      
++      console.log(`   📝 Transaction from: ${uiDeployer.substring(0, 10)}...`);
++      
+       if (platform === 'zora') {
+         await this.handleZoraLog(event, factory);
+       } else if (platform === 'clanker') {
+@@ -161,7 +168,7 @@
+           // Based on the ABI, parameters are:
+           // 0: tokenAddress
+           // 1: creatorAdmin
+-          // 2: interfaceAdmin  
++          // 2: interfaceAdmin
+           // 3: creatorRewardRecipient
+           // 4: interfaceRewardRecipient
+           // 5: positionId
+@@ -188,6 +195,7 @@
+               creatorAddress,
+               platform,
+               factory,
++              uiDeployer,
+               event
+             });
+           } else {
+@@ -203,6 +211,7 @@
+                 creatorAddress,
+                 platform,
+                 factory,
++                uiDeployer,
+                 event
+               });
+             }
+@@ -220,7 +229,7 @@
+     }
+   }
+ 
+-  async handleZoraLog(log, factory) {
++  async handleZoraLog(log, factory, uiDeployer) {
+     try {
+       console.log(`\n🔍 Processing Zora log at block ${log.blockNumber}, tx: ${log.transactionHash.substring(0, 16)}...`);
+       
+@@ -234,19 +243,19 @@
+       // Try Approach 1: The decode-zora-event.js method
+       console.log(`   🔍 Trying Approach 1 (decode-zora-event.js method)...`);
+       const result1 = this.tryApproach1(data, creatorAddress, log);
+       if (result1.success) {
+         console.log(`   ✅ Approach 1 succeeded! Token: ${result1.tokenAddress}`);
+-        await this.saveToken(result1, log, factory, creatorAddress);
++        await this.saveToken(result1, log, factory, creatorAddress, uiDeployer);
+         return;
+       }
+       
+       // Try Approach 2: Search for addresses in the data
+       console.log(`   🔍 Trying Approach 2 (address search)...`);
+       const result2 = this.tryApproach2(data, creatorAddress, log);
+       if (result2.success) {
+         console.log(`   ✅ Approach 2 succeeded! Token: ${result2.tokenAddress}`);
+-        await this.saveToken(result2, log, factory, creatorAddress);
++        await this.saveToken(result2, log, factory, creatorAddress, uiDeployer);
+         return;
+       }
+       
+@@ -255,7 +264,7 @@
+       const result3 = this.tryApproach3(data, creatorAddress, log);
+       if (result3.success) {
+         console.log(`   ✅ Approach 3 succeeded! Token: ${result3.tokenAddress}`);
+-        await this.saveToken(result3, log, factory, creatorAddress);
++        await this.saveToken(result3, log, factory, creatorAddress, uiDeployer);
+         return;
+       }
+       
+@@ -267,7 +276,7 @@
+     }
+   }
+ 
+-  async saveToken(result, log, factory, creatorAddress) {
++  async saveToken(result, log, factory, creatorAddress, uiDeployer) {
+     try {
+       // Fetch additional token metadata
+       const metadata = await this.fetchTokenMetadata(result.tokenAddress);
+@@ -290,7 +299,7 @@
+           detection_method, detection_block_number, detection_transaction_hash,
+           platform, factory_address, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+-        [
++        [ 
+           result.tokenAddress.toLowerCase(),
+           result.name || 'Unknown',
+           result.symbol || 'UNKNOWN',
+@@ -302,7 +311,8 @@
+           log.transactionHash,
+           'zora',
+           factory.address.toLowerCase(),
+-          'detected'
++          'detected',
++          uiDeployer.toLowerCase()  // Added ui_deployer
+         ]
+       );
+ 
+@@ -317,7 +327,7 @@
+     }
+   }
+ 
+-  async processToken({ tokenAddress, name, symbol, creatorAddress, platform, factory, event }) {
++  async processToken({ tokenAddress, name, symbol, creatorAddress, platform, factory, uiDeployer, event }) {
+     try {
+       console.log(`   💾 Saving token ${symbol} (${tokenAddress.substring(0, 10)}...)`);
+       
+@@ -338,7 +348,7 @@
+           detection_method, detection_block_number, detection_transaction_hash,
+           platform, factory_address, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+-        [
++        [
+           tokenAddress.toLowerCase(),
+           name || 'Unknown',
+           symbol || 'UNKNOWN',
+@@ -350,7 +360,8 @@
+           event.transactionHash,
+           platform,
+           factory.address.toLowerCase(),
+-          'detected'
++          'detected',
++          uiDeployer.toLowerCase()  // Added ui_deployer
+         ]
+       );
+ 

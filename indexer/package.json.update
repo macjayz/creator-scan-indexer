@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "bytecode-scanner": "node --experimental-modules bytecode-scanner/index.js",
+    "bytecode-scanner:test": "node --experimental-modules bytecode-scanner/test-scanner.js",
+    "bytecode-scanner:stats": "node --experimental-modules bytecode-scanner/get-stats.js"
+  }
+}
