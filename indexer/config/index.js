@@ -71,7 +71,7 @@ export const config = {
   // Alchemy free tier limitations
   alchemyLimits: {
     maxBlockRange: 10, // Maximum blocks per eth_getLogs call
-    maxBlocksPerRequest: 5, // Reduced for safety
+    maxBlocksPerRequest: 10, // Reduced for safety
     pollInterval: 45000 // 45 seconds between polls
   }
 };

@@ -42,8 +42,8 @@ class DexWatcher {
     });
     
     // Respect Alchemy free tier limits
-    this.maxBlocksPerRequest = config.alchemyLimits.maxBlocksPerRequest || 5;
-    this.pollInterval = config.alchemyLimits.pollInterval || 45000;
+    this.maxBlocksPerRequest = config.alchemyLimits.maxBlocksPerRequest || 10;
+    this.pollInterval = config.alchemyLimits.pollInterval || 30000;
     
     // Base tokens to ignore
     this.baseTokens = new Set(config.baseTokens.map(addr => addr.toLowerCase()));
@@ -78,56 +78,12 @@ class DexWatcher {
       console.log(`Current Base block: ${currentBaseBlock}`);
       
       for (const dex of this.dexes) {
-        console.log(`\nDEBUG: Checking ${dex.name}`);
-        console.log(`DEBUG: Configured start block: ${this.lastProcessedBlocks[dex.name]}`);
-        
-        const result = await db.query(
-          'SELECT MAX(block_number) as last_block, COUNT(*) as total_events FROM detection_events WHERE contract_address = $1',
-          [dex.factory.toLowerCase()]
-        );
-        
-        console.log(`DEBUG: Found ${result.rows[0]?.total_events || 0} events for ${dex.name}`);
-        console.log(`DEBUG: Max block in DB: ${result.rows[0]?.last_block || 'none'}`);
-        
-        let useBlock;
-        
-        if (result.rows[0] && result.rows[0].last_block) {
-          const lastBlock = parseInt(result.rows[0].last_block);
-          console.log(`DEBUG: lastBlock as number: ${lastBlock}`);
-          
-          const blocksBehind = currentBaseBlock - lastBlock;
-          console.log(`DEBUG: ${blocksBehind} blocks behind current`);
-          
-          // Check if stored block is reasonably recent (less than 20,000 blocks behind)
-          if (blocksBehind < 20000) {
-            // Use stored block + 1
-            useBlock = lastBlock + 1;
-            console.log(`   📍 ${dex.name}: Using stored block ${useBlock}`);
-          } else {
-            // Stored block is too old
-            console.log(`⚠️  Stored block ${lastBlock} is too old (${blocksBehind} blocks behind)`);
-            useBlock = currentBaseBlock - 1000; // Scan last 1000 blocks
-          }
-        } else {
-          // No stored blocks
-          console.log(`   📍 ${dex.name}: No stored blocks found`);
-          useBlock = currentBaseBlock - 1000; // Scan last 1000 blocks
-        }
-        
-        // Final check: If configured start block is way too old, ignore it
-        const configuredBlocksBehind = currentBaseBlock - this.lastProcessedBlocks[dex.name];
-        if (configuredBlocksBehind > 50000) {
-          console.log(`⚠️  Configured start block ${this.lastProcessedBlocks[dex.name]} is ${configuredBlocksBehind} blocks behind`);
-          console.log(`   Overriding with recent block: ${currentBaseBlock - 1000}`);
-          useBlock = currentBaseBlock - 1000;
-        }
-        
-        // Apply the final block to use
-        this.lastProcessedBlocks[dex.name] = useBlock;
-        console.log(`   ✅ Final start block: ${this.lastProcessedBlocks[dex.name]}`);
+        // PERMANENT FIX: Always start from 1000 blocks back, IGNORE database
+        this.lastProcessedBlocks[dex.name] = currentBaseBlock - 100;
+        console.log(`   📍 ${dex.name}: Starting from RECENT block ${this.lastProcessedBlocks[dex.name]}`);
       }
     } catch (error) {
-      console.log('No previous detection events found, starting from configured blocks');
+      console.log('Error getting current block, using configured start blocks');
     }
   }
 
@@ -157,6 +113,14 @@ class DexWatcher {
     try {
       let fromBlock = this.lastProcessedBlocks[dex.name];
       
+      // PERMANENT FIX: If we're way behind, jump forward
+      const blocksBehind = currentBlock - fromBlock;
+      if (blocksBehind > 5000) {
+        console.log(`   ⏩ ${dex.name}: Jumping forward ${blocksBehind} blocks`);
+        fromBlock = currentBlock - 100;
+        this.lastProcessedBlocks[dex.name] = fromBlock;
+      }
+      
       if (fromBlock >= currentBlock) {
         console.log(`   📭 ${dex.name}: Already at current block (${fromBlock})`);
         return;
@@ -172,19 +136,55 @@ class DexWatcher {
       
       console.log(`   🔍 ${dex.name}: Processing blocks ${fromBlock} to ${toBlock} (${toBlock - fromBlock + 1} blocks)`);
       
-      const contract = new ethers.Contract(dex.factory, dex.abi, this.provider);
-      
       try {
-        console.log("DEBUG: dex.factory =", dex.factory);
-        console.log("DEBUG: dex.eventName =", dex.eventName);
+        console.log(`   🔍 Querying logs directly for ${dex.name}...`);
         
-        const events = await contract.queryFilter(dex.eventName, fromBlock, toBlock);
-        console.log(`DEBUG: Got ${events.length} events`);
-        if (events.length > 0) {
-          console.log(`   🎯 Found ${events.length} new pool(s)`);
+         
+       // DEBUG: Check the signature
+       console.log(`   🔍 DEBUG: Checking event signature...`);
+       const testSignature = ethers.id("PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)");
+       console.log(`   Generated signature: ${testSignature}`);
+       console.log(`   Expected signature:  0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118`);
+       console.log(`   Match? ${testSignature === '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118'}`);
+       
+        // Use the correct PoolCreated event signature
+        const eventTopic = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118";
+        
+        // Query logs directly (more reliable than contract.queryFilter)
+        const rawLogs = await this.provider.getLogs({
+          address: dex.factory,
+          topics: [eventTopic],
+          fromBlock: fromBlock,
+          toBlock: toBlock
+        });
+        
+        console.log(`DEBUG: Raw logs found: ${rawLogs.length}`);
+        
+        if (rawLogs.length > 0) {
+          console.log(`   🎯 Found ${rawLogs.length} new pool(s)!`);
           
-          for (const event of events) {
-            await this.handlePoolCreation(dex, event);
+          // Parse each raw log into an event object
+          for (const rawLog of rawLogs) {
+            try {
+              // Create interface from ABI and parse the log
+              const iface = new ethers.Interface(dex.abi);
+              const parsedLog = iface.parseLog({
+                topics: rawLog.topics,
+                data: rawLog.data
+              });
+              
+              // Create an event-like object that handlePoolCreation expects
+              const event = {
+                args: parsedLog.args,
+                blockNumber: rawLog.blockNumber,
+                transactionHash: rawLog.transactionHash,
+                logIndex: rawLog.logIndex
+              };
+              
+              await this.handlePoolCreation(dex, event);
+            } catch (parseError) {
+              console.error(`   ❌ Error parsing log:`, parseError.message);
+            }
           }
         } else {
           console.log(`   📭 No new pools found`);
@@ -203,12 +203,31 @@ class DexWatcher {
           toBlock = Math.min(fromBlock + smallerRange - 1, currentBlock);
           
           try {
-            const events = await contract.queryFilter(dex.eventName, fromBlock, toBlock);
+            const eventTopic = ethers.id("PoolCreated(address,address,uint24,int24,address)");
+            const rawLogs = await this.provider.getLogs({
+              address: dex.factory,
+              topics: [eventTopic],
+              fromBlock: fromBlock,
+              toBlock: toBlock
+            });
             
-            if (events.length > 0) {
-              console.log(`   🎯 Found ${events.length} new pool(s) with smaller range`);
+            if (rawLogs.length > 0) {
+              console.log(`   🎯 Found ${rawLogs.length} new pool(s) with smaller range`);
               
-              for (const event of events) {
+              for (const rawLog of rawLogs) {
+                const iface = new ethers.Interface(dex.abi);
+                const parsedLog = iface.parseLog({
+                  topics: rawLog.topics,
+                  data: rawLog.data
+                });
+                
+                const event = {
+                  args: parsedLog.args,
+                  blockNumber: rawLog.blockNumber,
+                  transactionHash: rawLog.transactionHash,
+                  logIndex: rawLog.logIndex
+                };
+                
                 await this.handlePoolCreation(dex, event);
               }
             }
@@ -413,38 +432,64 @@ class DexWatcher {
   }
 
   async saveDexPool(dex, poolAddress, tokenAddress, pairedWith, event) {
-    // First check if pool already exists
-    const existingPool = await db.query(
-      'SELECT id FROM dex_pools WHERE pool_address = $1',
-      [poolAddress.toLowerCase()]
-    );
+    console.log(`      🔍 Attempting to save DEX pool...`);
+    console.log(`      Pool: ${poolAddress}`);
+    console.log(`      DEX: ${dex.name}`);
+    console.log(`      Token0: ${tokenAddress}`);
+    console.log(`      Token1: ${pairedWith}`);
     
-    if (existingPool.rows.length > 0) {
-      console.log(`      ⚠️ Pool already exists in database`);
-      return;
+    try {
+      // First check if pool already exists
+      const existingPool = await db.query(
+        'SELECT id FROM dex_pools WHERE pool_address = $1',
+        [poolAddress.toLowerCase()]
+      );
+      
+      console.log(`      Existing pool check: ${existingPool.rows.length} found`);
+      
+      if (existingPool.rows.length > 0) {
+        console.log(`      ⚠️ Pool already exists in database`);
+        return;
+      }
+      
+      console.log(`      🔍 Saving new pool to database...`);
+      const result = await db.query(
+        `INSERT INTO dex_pools 
+         (pool_address, dex_name, token0_address, token1_address, 
+          factory_address, creation_block, creation_transaction_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         RETURNING id`,
+        [
+          poolAddress.toLowerCase(),
+          dex.name,
+          tokenAddress.toLowerCase(),
+          pairedWith.toLowerCase(),
+          dex.factory.toLowerCase(),
+          event.blockNumber,
+          event.transactionHash
+        ]
+      );
+      
+      console.log(`      ✅ Pool saved with ID: ${result.rows[0]?.id}`);
+      
+    } catch (error) {
+      console.error(`      ❌ ERROR saving DEX pool: ${error.message}`);
+      console.error(`      ❌ SQL Error detail:`, error.detail || 'No detail');
+      console.error(`      ❌ Full error:`, error);
     }
-    
-    return db.query(
-      `INSERT INTO dex_pools 
-       (pool_address, dex_name, token0_address, token1_address, 
-        factory_address, creation_block, creation_transaction_hash, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-      [
-        poolAddress.toLowerCase(),
-        dex.name,
-        tokenAddress.toLowerCase(),
-        pairedWith.toLowerCase(),
-        dex.factory.toLowerCase(),
-        event.blockNumber,
-        event.transactionHash
-      ]
-    );
   }
 
   isPotentialCreatorToken(token0, token1) {
     const t0 = token0.toLowerCase();
     const t1 = token1.toLowerCase();
     
+     // ADD DEBUG LOGGING
+  console.log(`DEBUG isPotentialCreatorToken:`);
+  console.log(`  token0: ${t0}`);
+  console.log(`  token1: ${t1}`);
+  console.log(`  token0 in baseTokens: ${this.baseTokens.has(t0)}`);
+  console.log(`  token1 in baseTokens: ${this.baseTokens.has(t1)}`);
+
     // Check if one token is a base token and the other is not
     const token0IsBase = this.baseTokens.has(t0);
     const token1IsBase = this.baseTokens.has(t1);

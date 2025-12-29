@@ -121,6 +121,36 @@ class FactoryWatcher {
       console.log(`\n🔍 Processing Zora log at block ${log.blockNumber}, tx: ${log.transactionHash.substring(0, 16)}...`);
       console.log(`   📊 Data length: ${log.data.length} chars (${log.data.length / 2} bytes)`);
 
+      // Try to decode using contract ABI first
+      try {
+        const contract = new ethers.Contract(factory.address, factory.abi, this.httpProvider);
+        const decodedEvent = contract.interface.parseLog({
+          topics: log.topics,
+          data: log.data
+        });
+        
+        if (decodedEvent && decodedEvent.name === 'CoinCreated') {
+          const tokenAddress = decodedEvent.args.token;
+          const creatorAddress = decodedEvent.args.payoutRecipient;
+          
+          console.log(`   ✅ Successfully decoded event!`);
+          console.log(`      Token: ${tokenAddress}`);
+          console.log(`      Creator: ${creatorAddress}`);
+          
+          await this.saveTokenWithErrorHandling({
+            success: true,
+            tokenAddress,
+            name: 'Zora Token',
+            symbol: 'ZORA',
+            method: 'decoded'
+          }, log, factory, creatorAddress);
+          return;
+        }
+      } catch (decodeError) {
+        console.log(`   ⚠️ Could not decode with ABI, falling back to raw parsing`);
+      }
+
+      // Fall back to raw log parsing
       const data = log.data.substring(2); // Remove 0x
       const creatorAddress = '0x' + log.topics[1].substring(26); // Extract creator
 
@@ -159,7 +189,19 @@ class FactoryWatcher {
       const coinPosition = coinOffset * 2;
       if (coinPosition + 64 > data.length) return { success: false };
 
-      const tokenAddress = '0x' + data.substring(coinPosition + 24, coinPosition + 64);
+      let tokenAddress = '0x' + data.substring(coinPosition + 24, coinPosition + 64);
+      
+      // Handle padded addresses
+      if (tokenAddress.startsWith('0x000000000000000000000000')) {
+        tokenAddress = '0x' + tokenAddress.substring(26); // Remove padding
+      }
+      
+      // Validate address is not garbage (ending with zeros)
+      if (tokenAddress.endsWith('0000000000000000') || 
+          tokenAddress.endsWith('0000000000000000000000000000000000000000')) {
+        return { success: false };
+      }
+      
       if (!ethers.isAddress(tokenAddress)) return { success: false };
 
       return { success: true, tokenAddress, name: 'Zora Token', symbol: 'ZORA', method: 'approach1' };
@@ -174,8 +216,20 @@ class FactoryWatcher {
       if (!addressMatches) return { success: false };
 
       for (const match of addressMatches) {
-        const potentialAddress = '0x' + match;
-        if (ethers.isAddress(potentialAddress) && potentialAddress.toLowerCase() !== creatorAddress.toLowerCase()) {
+        let potentialAddress = '0x' + match;
+        
+        // Handle padded addresses
+        if (potentialAddress.startsWith('0x000000000000000000000000')) {
+          potentialAddress = '0x' + match.substring(24); // Remove padding
+        }
+        
+        // STRICTER VALIDATION: Check if it's a valid address AND not all zeros
+        if (ethers.isAddress(potentialAddress) && 
+            potentialAddress.toLowerCase() !== creatorAddress.toLowerCase() &&
+            !potentialAddress.endsWith('0000000000000000') && // NOT ending with zeros
+            !potentialAddress.endsWith('0000000000000000000000000000000000000000') &&
+            potentialAddress.length === 42) {
+          
           return { success: true, tokenAddress: potentialAddress, name: 'Zora Token', symbol: 'ZORA', method: 'approach2' };
         }
       }
@@ -190,8 +244,22 @@ class FactoryWatcher {
       const potentialPositions = [64, 128, 192, 256, 320, 384];
       for (const position of potentialPositions) {
         if (position + 64 <= data.length) {
-          const potentialAddress = '0x' + data.substring(position + 24, position + 64);
-          if (ethers.isAddress(potentialAddress)) return { success: true, tokenAddress: potentialAddress, name: 'Zora Token', symbol: 'ZORA', method: 'approach3' };
+          let potentialAddress = '0x' + data.substring(position + 24, position + 64);
+          
+          // Handle padded addresses
+          if (potentialAddress.startsWith('0x000000000000000000000000')) {
+            potentialAddress = '0x' + potentialAddress.substring(26); // Remove padding
+          }
+          
+          // Validate address is not garbage
+          if (potentialAddress.endsWith('0000000000000000') || 
+              potentialAddress.endsWith('0000000000000000000000000000000000000000')) {
+            continue; // Try next position
+          }
+          
+          if (ethers.isAddress(potentialAddress) && potentialAddress.length === 42) {
+            return { success: true, tokenAddress: potentialAddress, name: 'Zora Token', symbol: 'ZORA', method: 'approach3' };
+          }
         }
       }
       return { success: false };
@@ -202,7 +270,72 @@ class FactoryWatcher {
 
   async saveTokenWithErrorHandling(result, log, factory, creatorAddress) {
     try {
-      console.log(`   💾 Saving token ${result.symbol} (${result.tokenAddress.substring(0, 16)}...)`);
+      console.log(`   💾 Processing token ${result.tokenAddress.substring(0, 16)}...`);
+      
+      // Additional validation before saving
+      if (result.tokenAddress.length !== 42) {
+        console.log(`   ❌ Invalid address length: ${result.tokenAddress.length}`);
+        return;
+      }
+      
+      if (!ethers.isAddress(result.tokenAddress)) {
+        console.log(`   ❌ Not a valid Ethereum address`);
+        return;
+      }
+      
+      // Default values in case metadata fetch fails
+      let tokenName = result.name || 'Unknown Token';
+      let tokenSymbol = result.symbol || 'UNKNOWN';
+      let decimals = 18;
+      let totalSupply = '0';
+      
+      // Try to fetch real ERC20 metadata
+      console.log(`   🔍 Fetching real token metadata...`);
+      try {
+        const erc20Abi = [
+          'function name() view returns (string)',
+          'function symbol() view returns (string)',
+          'function decimals() view returns (uint8)',
+          'function totalSupply() view returns (uint256)'
+        ];
+        
+        const tokenContract = new ethers.Contract(result.tokenAddress, erc20Abi, this.httpProvider);
+        
+        // Set a timeout for metadata fetch
+        const timeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Metadata fetch timeout')), 10000)
+        );
+        
+        const metadataPromise = Promise.all([
+          tokenContract.name().catch(() => ''),
+          tokenContract.symbol().catch(() => ''),
+          tokenContract.decimals().catch(() => 18),
+          tokenContract.totalSupply().catch(() => '0')
+        ]);
+        
+        const [realName, realSymbol, realDecimals, realTotalSupply] = 
+          await Promise.race([metadataPromise, timeout]);
+        
+        // Use real metadata if available
+        if (realName && realName.trim() !== '') {
+          tokenName = realName.substring(0, 200);
+          console.log(`   ✅ Real name: ${tokenName}`);
+        }
+        
+        if (realSymbol && realSymbol.trim() !== '') {
+          tokenSymbol = realSymbol.substring(0, 50);
+          console.log(`   ✅ Real symbol: ${tokenSymbol}`);
+        }
+        
+        decimals = Number(realDecimals);
+        totalSupply = realTotalSupply.toString();
+        
+      } catch (metadataError) {
+        console.log(`   ⚠️ Could not fetch metadata: ${metadataError.message}`);
+        console.log(`   Using default: ${tokenName} (${tokenSymbol})`);
+      }
+      
+      // Save to database with real metadata
       const insertTokenQuery = `
         INSERT INTO tokens (
           address, name, symbol, decimals, total_supply, 
@@ -212,19 +345,21 @@ class FactoryWatcher {
         ON CONFLICT (address) DO UPDATE SET 
           name = EXCLUDED.name,
           symbol = EXCLUDED.symbol,
+          decimals = EXCLUDED.decimals,
+          total_supply = EXCLUDED.total_supply,
           updated_at = NOW(),
           detection_block_number = EXCLUDED.detection_block_number,
           block_number = EXCLUDED.block_number
         RETURNING id
       `;
-
+  
       const insertValues = [
-        result.tokenAddress,
-        result.name,
-        result.symbol,
-        18,
-        '0',
-        creatorAddress,
+        result.tokenAddress.toLowerCase(),
+        tokenName,
+        tokenSymbol,
+        decimals,
+        totalSupply,
+        creatorAddress.toLowerCase(),
         'zora',
         `zora_${result.method}`,
         log.blockNumber,
@@ -232,16 +367,14 @@ class FactoryWatcher {
         factory.address,
         log.blockNumber
       ];
-
+  
       const dbResult = await db.query(insertTokenQuery, insertValues);
-      if (dbResult.rowCount > 0) console.log(`   ✅ Saved token ID: ${dbResult.rows[0].id}`);
+      if (dbResult.rowCount > 0) {
+        console.log(`   ✅ Saved: ${tokenSymbol} (${tokenName})`);
+      }
     } catch (error) {
       console.error(`   ❌ Error saving token:`, error.message);
     }
-  }
-
-  async handleClankerEvent(log, factory) {
-    // Your previous Clanker logic remains
   }
 }
 
